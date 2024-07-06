@@ -1,0 +1,13 @@
+version: '3.8'
+
+services:
+  splunk-http-ingester:
+    image: esoadamo/splunk-http-ingester:latest
+    build: .
+    ports:
+      - "8001:8000"
+    environment:
+      SHI_ENDPOINT: your_splunk_endpoint
+      SHI_TOKEN: your_splunk_token
+    volumes:
+      - ./data:/app/data
