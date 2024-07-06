@@ -1,11 +1,11 @@
 from os import environ
 from pathlib import Path
-from typing import Set, Optional
-from uuid import uuid4
+from typing import Set
 
-import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, Body
+
+from ingest_cache import IngestRequest, IngestCache
 
 load_dotenv()
 
@@ -15,6 +15,8 @@ DIR_DATA = Path(environ.get("SHI_DATA")) if 'SHI_DATA' in environ else Path(__fi
 FILE_API_KEYS = DIR_DATA / "api_keys.txt"
 
 API_KEYS: Set[str] = set(filter(bool, map(str.strip, FILE_API_KEYS.read_text().splitlines())))
+CACHE = IngestCache(DIR_DATA / "cache", SPLUNK_ENDPOINT, SPLUNK_TOKEN)
+
 
 app = FastAPI()
 
@@ -30,31 +32,19 @@ async def healthcheck():
 
 
 @app.post("/ingest")
-async def ingest(api_key: str, source_type: str, source: str,
-                 payload: str = Body(..., media_type="text/plain"), channel: Optional[str] = None):
+async def ingest(api_key: str, source_type: str, source: str, channel: str,
+                 payload: str = Body(..., media_type="text/plain")):
     if api_key not in API_KEYS:
         return {"message": "Invalid API key"}, 401
 
-    if not channel:
-        channel = uuid4().hex.upper()
+    request: IngestRequest = {
+        "source_type": source_type,
+        "source": source,
+        "channel": channel,
+        "payload": payload
+    }
 
-    async with httpx.AsyncClient(verify=False) as client:
-        headers = {
-            'Authorization': f'Splunk {SPLUNK_TOKEN}',
-            'Content-Type': 'text/plain',
-            'X-Splunk-Request-Channel': channel
-        }
-        response = await client.post(
-            SPLUNK_ENDPOINT,
-            content=payload,
-            params={
-                "sourcetype": source_type,
-                "source": source,
-            },
-            headers=headers
-        )
-
-        if response.status_code == 200:
-            return {"message": "Data ingested and forwarded to Splunk"}
-        else:
-            return {"message": "Failed to forward data to Splunk", "error": response.text}, 500
+    if await CACHE.send(request):
+        return {"message": "Data ingested and forwarded to Splunk"}
+    else:
+        return {"message": "Failed to forward data to Splunk, will send later"}
