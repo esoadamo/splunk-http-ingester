@@ -101,7 +101,7 @@ class IngestCache:
     async def send(self, ingest_request: IngestRequest, save_on_fail: bool = True) -> bool:
         request = self.trim_request(ingest_request)
 
-        async with httpx.AsyncClient(verify=False) as client:
+        async with httpx.AsyncClient(verify=False, timeout=360.0) as client:
             headers = {
                 'Authorization': f'Splunk {self.__splunk_token}',
                 'Content-Type': 'text/plain',
