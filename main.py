@@ -37,7 +37,7 @@ async def healthcheck():
 
 @app.post("/ingest")
 async def ingest(api_key: str, source_type: str, source: str, channel: str,
-                 payload: str = Body(..., media_type="text/plain")):
+                 payload: str = Body(...)):
     if api_key not in API_KEYS:
         return {"message": "Invalid API key"}, 401
 
