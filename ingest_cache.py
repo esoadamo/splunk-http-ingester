@@ -139,9 +139,13 @@ class IngestCache:
                 'X-Crystalline-Token': self.__crystalline_token,
                 'Content-Type': 'text/plain',
             }
+
+            lines = request['payload'].splitlines()
+            lines = map(lambda x: f"{x} source={request['source']} sourcetype={request['source_type']}", lines)
+
             response = await client.post(
                 f"{self.__crystalline_endpoint}/raw",
-                content=request['payload'],
+                content="\n".join(lines),
                 headers=headers
             )
 
