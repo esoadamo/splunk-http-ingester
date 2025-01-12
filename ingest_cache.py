@@ -22,7 +22,7 @@ def get_last_line(text: str) -> str:
 
 
 class IngestCache:
-    def __init__(self, cache_dir: Path, splunk_endpoint: str, splunk_token: str, crystalline_host: Optional[str] = None, crystalline_token: Optional[str] = None):
+    def __init__(self, cache_dir: Path, splunk_endpoint: str, splunk_token: str, crystalline_endpoint: Optional[str] = None, crystalline_token: Optional[str] = None):
         self.__cache_dir: Path = cache_dir
         self.__cache_dir.mkdir(parents=True, exist_ok=True)
         self.__cache_last_records: Dict[str, str] = {}
@@ -32,7 +32,7 @@ class IngestCache:
         self.__cache_lock = Lock()
         self.__splunk_endpoint = splunk_endpoint
         self.__splunk_token = splunk_token
-        self.__crystalline_host = crystalline_host
+        self.__crystalline_endpoint = crystalline_endpoint
         self.__crystalline_token = crystalline_token
 
         if self.__cache_last_records_file.exists():
@@ -100,16 +100,15 @@ class IngestCache:
                         requests.remove(request)
                 cache_file.write_bytes(dumps(requests))
 
-
     async def send(self, ingest_request: IngestRequest, save_on_fail: bool = True) -> bool:
         request = self.trim_request(ingest_request)
-        await self.__send_splunk(request, save_on_fail)
-        if self.__crystalline_host:
+        result = await self.__send_splunk(request, save_on_fail)
+        if self.__crystalline_endpoint:
             try:
                 await self.__send_crystalline(request, False)
             except Exception as e:
                 print('[!] Crystalline error', e)
-
+        return result
 
     async def __send_splunk(self, request: IngestRequest, save_on_fail: bool = True) -> bool:
         async with httpx.AsyncClient(verify=False, timeout=360.0) as client:
@@ -141,7 +140,7 @@ class IngestCache:
                 'Content-Type': 'text/plain',
             }
             response = await client.post(
-                f"{self.__crystalline_host}/raw",
+                f"{self.__crystalline_endpoint}/raw",
                 content=request['payload'],
                 headers=headers
             )

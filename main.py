@@ -12,14 +12,14 @@ load_dotenv()
 SPLUNK_ENDPOINT = environ["SHI_ENDPOINT"]
 SPLUNK_TOKEN = environ["SHI_TOKEN"]
 
-CRYSTALLINE_HOST = environ.get('SHI_CRYSTALLINE_HOST')
+CRYSTALLINE_ENDPOINT = environ.get('SHI_CRYSTALLINE_HOST')
 CRYSTALLINE_TOKEN = environ.get('SHI_CRYSTALLINE_TOKEN')
 
 DIR_DATA = Path(environ.get("SHI_DATA")) if 'SHI_DATA' in environ else Path(__file__).parent / "data"
 FILE_API_KEYS = DIR_DATA / "api_keys.txt"
 
 API_KEYS: Set[str] = set(filter(bool, map(str.strip, FILE_API_KEYS.read_text().splitlines())))
-CACHE = IngestCache(DIR_DATA / "cache", SPLUNK_ENDPOINT, SPLUNK_TOKEN)
+CACHE = IngestCache(DIR_DATA / "cache", SPLUNK_ENDPOINT, SPLUNK_TOKEN, CRYSTALLINE_ENDPOINT, CRYSTALLINE_TOKEN)
 
 
 app = FastAPI()
