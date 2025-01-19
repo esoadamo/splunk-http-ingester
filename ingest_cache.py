@@ -6,6 +6,8 @@ from threading import Lock
 
 import httpx
 
+from time_utils import extract_timestamp_iso, extract_timestamp_unix
+
 
 class IngestRequest(TypedDict):
     source_type: str
@@ -22,7 +24,8 @@ def get_last_line(text: str) -> str:
 
 
 class IngestCache:
-    def __init__(self, cache_dir: Path, splunk_endpoint: str, splunk_token: str, crystalline_endpoint: Optional[str] = None, crystalline_token: Optional[str] = None):
+    def __init__(self, cache_dir: Path, splunk_endpoint: str, splunk_token: str,
+                 crystalline_endpoint: Optional[str] = None, crystalline_token: Optional[str] = None):
         self.__cache_dir: Path = cache_dir
         self.__cache_dir.mkdir(parents=True, exist_ok=True)
         self.__cache_last_records: Dict[str, str] = {}
@@ -141,7 +144,13 @@ class IngestCache:
             }
 
             lines = request['payload'].splitlines()
-            lines = map(lambda x: f"{x} source={request['source']} sourcetype={request['source_type']}", lines)
+            lines = map(
+                lambda x: f"timestamp={extract_timestamp_unix(x)} "
+                          f"source={request['source']} "
+                          f"sourcetype={request['source_type']} "
+                          f"{x}",
+                lines
+            )
 
             response = await client.post(
                 f"{self.__crystalline_endpoint}/raw",
