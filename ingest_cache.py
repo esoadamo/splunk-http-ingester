@@ -1,12 +1,12 @@
 import asyncio
-from pickle import loads, dumps
 from pathlib import Path
-from typing import TypedDict, Dict, Optional
+from pickle import loads, dumps
 from threading import Lock
+from typing import TypedDict, Dict, Optional, List
 
 import httpx
 
-from time_utils import extract_timestamp_iso, extract_timestamp_unix
+from time_utils import extract_timestamp_unix
 
 
 class IngestRequest(TypedDict):
@@ -14,6 +14,20 @@ class IngestRequest(TypedDict):
     source: str
     channel: str
     payload: str
+
+
+class ConfigService(TypedDict):
+    endpoint: str
+    token: str
+
+class ConfigLocal(TypedDict):
+    api_keys: List[str]
+
+
+class Config(TypedDict):
+    local: ConfigLocal
+    splunk: Optional[ConfigService]
+    crystalline: Optional[ConfigService]
 
 
 def get_last_line(text: str) -> str:
@@ -24,8 +38,7 @@ def get_last_line(text: str) -> str:
 
 
 class IngestCache:
-    def __init__(self, cache_dir: Path, splunk_endpoint: str, splunk_token: str,
-                 crystalline_endpoint: Optional[str] = None, crystalline_token: Optional[str] = None):
+    def __init__(self, cache_dir: Path, config: Config):
         self.__cache_dir: Path = cache_dir
         self.__cache_dir.mkdir(parents=True, exist_ok=True)
         self.__cache_last_records: Dict[str, str] = {}
@@ -33,10 +46,7 @@ class IngestCache:
         self.__cache_last_records_file = self.__cache_dir / "_last_records.pickle"
         self.__cache_locks: Dict[str, Lock] = {}
         self.__cache_lock = Lock()
-        self.__splunk_endpoint = splunk_endpoint
-        self.__splunk_token = splunk_token
-        self.__crystalline_endpoint = crystalline_endpoint
-        self.__crystalline_token = crystalline_token
+        self.__config = config
 
         if self.__cache_last_records_file.exists():
             self.__cache_last_records = loads(self.__cache_last_records_file.read_bytes())
@@ -83,8 +93,8 @@ class IngestCache:
             self.__cache_last_records[ingest_request['channel']] = get_last_line(ingest_request['payload'])
         return ingest_request
 
-    def save(self, ingest_request: IngestRequest):
-        cache_file = self.__cache_dir / f"{ingest_request['channel']}.pickle"
+    def save(self, ingest_request: IngestRequest, service: str):
+        cache_file = self.__cache_dir / f"{service}_{ingest_request['channel']}.pickle"
         with self.__get_cache_lock(ingest_request['channel']):
             existing = loads(cache_file.read_bytes()) if cache_file.exists() else []
             existing.append(ingest_request)
@@ -105,23 +115,22 @@ class IngestCache:
 
     async def send(self, ingest_request: IngestRequest, save_on_fail: bool = True) -> bool:
         request = self.trim_request(ingest_request)
-        result = await self.__send_splunk(request, save_on_fail)
-        if self.__crystalline_endpoint:
-            try:
-                await self.__send_crystalline(request, False)
-            except Exception as e:
-                print('[!] Crystalline error', e)
+        result = True
+        if self.__config.get('splunk'):
+            result = result and await self.__send_splunk(request, save_on_fail)
+        if self.__config.get('crystalline'):
+            result = result and await self.__send_crystalline(request, save_on_fail)
         return result
 
     async def __send_splunk(self, request: IngestRequest, save_on_fail: bool = True) -> bool:
         async with httpx.AsyncClient(verify=False, timeout=360.0) as client:
             headers = {
-                'Authorization': f'Splunk {self.__splunk_token}',
+                'Authorization': f'Splunk {self.__config["splunk"]["token"]}',
                 'Content-Type': 'text/plain',
                 'X-Splunk-Request-Channel': request['channel'],
             }
             response = await client.post(
-                self.__splunk_endpoint,
+                self.__config['splunk']['endpoint'],
                 content=request['payload'],
                 params={
                     "sourcetype": request['source_type'],
@@ -132,14 +141,14 @@ class IngestCache:
 
             if response.status_code != 200:
                 if save_on_fail:
-                    self.save(request)
+                    self.save(request, 'splunk')
                 return False
             return True
 
     async def __send_crystalline(self, request: IngestRequest, save_on_fail: bool = True) -> bool:
         async with httpx.AsyncClient(verify=False, timeout=360.0) as client:
             headers = {
-                'X-Crystalline-Token': self.__crystalline_token,
+                'X-Crystalline-Token': self.__config['crystalline']['token'],
                 'Content-Type': 'text/plain',
             }
 
@@ -153,13 +162,13 @@ class IngestCache:
             )
 
             response = await client.post(
-                f"{self.__crystalline_endpoint}/raw",
+                f"{self.__config["crystalline"]["endpoint"]}/raw",
                 content="\n".join(lines),
                 headers=headers
             )
 
             if response.status_code != 200:
                 if save_on_fail:
-                    self.save(request)
+                    self.save(request, 'crystalline')
                 return False
             return True
