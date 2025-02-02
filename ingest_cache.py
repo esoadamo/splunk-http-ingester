@@ -28,6 +28,7 @@ class Config(TypedDict):
     local: ConfigLocal
     splunk: Optional[ConfigService]
     crystalline: Optional[ConfigService]
+    shi: Optional[ConfigService]
 
 
 def get_last_line(text: str) -> str:
@@ -120,6 +121,8 @@ class IngestCache:
             result = result and await self.__send_splunk(request, save_on_fail)
         if self.__config.get('crystalline'):
             result = result and await self.__send_crystalline(request, save_on_fail)
+        if self.__config.get('shi'):
+            result = result and await self.__send_shi(request, save_on_fail)
         return result
 
     async def __send_splunk(self, request: IngestRequest, save_on_fail: bool = True) -> bool:
@@ -170,5 +173,29 @@ class IngestCache:
             if response.status_code != 200:
                 if save_on_fail:
                     self.save(request, 'crystalline')
+                return False
+            return True
+
+    async def __send_shi(self, request: IngestRequest, save_on_fail: bool = True) -> bool:
+        async with httpx.AsyncClient(verify=False, timeout=360.0) as client:
+            headers = {
+                'Content-Type': 'text/plain',
+            }
+
+            response = await client.post(
+                f"{self.__config["shi"]["endpoint"]}",
+                content=request['payload'],
+                params={
+                    "source": request['source'],
+                    "source_type": request['source_type'],
+                    "channel": request['channel'],
+                    "api_key": self.__config["shi"]["token"]
+                },
+                headers=headers
+            )
+
+            if response.status_code != 200:
+                if save_on_fail:
+                    self.save(request, 'shi')
                 return False
             return True

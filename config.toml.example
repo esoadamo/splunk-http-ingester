@@ -6,5 +6,9 @@ token="spl123"
 endpoint="http://crystalline/api/ingest/uuid"
 token="cry123"
 
+[shi]
+endpoint="https://shi.local:8000/ingest"
+token="shi123"
+
 [local]
 api_keys=["local123", "local456"]
