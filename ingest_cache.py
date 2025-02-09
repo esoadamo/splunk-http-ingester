@@ -1,10 +1,11 @@
 import asyncio
 from pathlib import Path
-from pickle import loads, dumps
-from threading import Lock
-from typing import TypedDict, Dict, Optional, List
+from random import randint
+from typing import TypedDict, Optional, List, Set
+from uuid import uuid4
 
 import httpx
+from sqlidictature import SQLiDictature
 
 from time_utils import extract_timestamp_unix
 
@@ -19,6 +20,7 @@ class IngestRequest(TypedDict):
 class ConfigService(TypedDict):
     endpoint: str
     token: str
+
 
 class ConfigLocal(TypedDict):
     api_keys: List[str]
@@ -42,27 +44,11 @@ class IngestCache:
     def __init__(self, cache_dir: Path, config: Config):
         self.__cache_dir: Path = cache_dir
         self.__cache_dir.mkdir(parents=True, exist_ok=True)
-        self.__cache_last_records: Dict[str, str] = {}
-        self.__cache_last_records_lock = Lock()
-        self.__cache_last_records_file = self.__cache_dir / "_last_records.pickle"
-        self.__cache_locks: Dict[str, Lock] = {}
-        self.__cache_lock = Lock()
+        self.__cache_db = SQLiDictature(cache_dir / "cache.sqlite3")
+        self.__cache_last_records = self.__cache_db['_last_records']
         self.__config = config
 
-        if self.__cache_last_records_file.exists():
-            self.__cache_last_records = loads(self.__cache_last_records_file.read_bytes())
-
-        asyncio.create_task(self.__persist_loop())
-        asyncio.create_task(self.__persist_loop())
-
-    async def __persist_loop(self):
-        while True:
-            # noinspection PyBroadException
-            try:
-                self.persist()
-            except Exception:
-                pass
-            await asyncio.sleep(10)
+        asyncio.create_task(self.__send_all_cached())
 
     async def __send_all_cached(self):
         while True:
@@ -71,59 +57,43 @@ class IngestCache:
                 await self.send_all_saved()
             except Exception:
                 pass
-            await asyncio.sleep(300)
-
-    def __get_cache_lock(self, channel: str) -> Lock:
-        if channel not in self.__cache_locks:
-            with self.__cache_lock:
-                if channel not in self.__cache_locks:
-                    self.__cache_locks[channel] = Lock()
-        return self.__cache_locks[channel]
-
-    def persist(self):
-        with self.__cache_last_records_lock:
-            self.__cache_last_records_file.write_bytes(dumps(self.__cache_last_records))
+            await asyncio.sleep(300 + randint(0, 300))
 
     def trim_request(self, ingest_request: IngestRequest) -> IngestRequest:
-        with self.__get_cache_lock(ingest_request['channel']):
-            last_line = self.__cache_last_records.get(ingest_request['channel'])
-            if last_line:
-                last_line_index = ingest_request['payload'].find(last_line)
-                if last_line_index != -1:
-                    ingest_request['payload'] = ingest_request['payload'][last_line_index + len(last_line) + 1:]
-            self.__cache_last_records[ingest_request['channel']] = get_last_line(ingest_request['payload'])
+        last_line = self.__cache_last_records.get(ingest_request['channel'])
+        if last_line:
+            last_line_index = ingest_request['payload'].find(last_line)
+            if last_line_index != -1:
+                ingest_request['payload'] = ingest_request['payload'][last_line_index + len(last_line) + 1:]
+        self.__cache_last_records[ingest_request['channel']] = get_last_line(ingest_request['payload'])
         return ingest_request
 
     def save(self, ingest_request: IngestRequest, service: str):
-        cache_file = self.__cache_dir / f"{service}_{ingest_request['channel']}.pickle"
-        with self.__get_cache_lock(ingest_request['channel']):
-            existing = loads(cache_file.read_bytes()) if cache_file.exists() else []
-            existing.append(ingest_request)
-            cache_file.write_bytes(dumps(existing))
+        cache_table = f"cr_{service}_{ingest_request['channel']}"
+        self.__cache_db[cache_table][str(uuid4())] = ingest_request
 
     async def send_all_saved(self) -> None:
-        for cache_file in self.__cache_dir.glob("*.pickle"):
-            if cache_file.name.startswith("_"):
-                continue
-            with self.__get_cache_lock(cache_file.stem):
-                if not cache_file.exists():
-                    continue
-                requests = loads(cache_file.read_bytes())
-                for request in requests:
-                    if await self.send(request, save_on_fail=False):
-                        requests.remove(request)
-                cache_file.write_bytes(dumps(requests))
+        for cache_table in filter(lambda x: x.startswith('cr_'), self.__cache_db.keys()):
+            _, service, channel = cache_table.split('_')
+            for key, request in self.__cache_db[cache_table].items():
+                success = await self.send(request, False, {service})
+                if success and key in self.__cache_db[cache_table]:
+                    del self.__cache_db[cache_table][key]
 
-    async def send(self, ingest_request: IngestRequest, save_on_fail: bool = True) -> bool:
+    async def send(self, ingest_request: IngestRequest, save_on_fail: bool = True, services: Optional[Set[str]] = None) -> bool:
         request = self.trim_request(ingest_request)
+        result_set = False
         result = True
-        if self.__config.get('splunk'):
+        if self.__config.get('splunk') and (not services or 'splunk' in services):
             result = result and await self.__send_splunk(request, save_on_fail)
-        if self.__config.get('crystalline'):
+            result_set = True
+        if self.__config.get('crystalline') and (not services or 'crystalline' in services):
             result = result and await self.__send_crystalline(request, save_on_fail)
-        if self.__config.get('shi'):
+            result_set = True
+        if self.__config.get('shi') and (not services or 'shi' in services):
             result = result and await self.__send_shi(request, save_on_fail)
-        return result
+            result_set = True
+        return result and result_set
 
     async def __send_splunk(self, request: IngestRequest, save_on_fail: bool = True) -> bool:
         async with httpx.AsyncClient(verify=False, timeout=360.0) as client:
