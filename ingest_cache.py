@@ -77,11 +77,16 @@ class IngestCache:
             _, service, channel = cache_table.split('_')
             for key, request in self.__cache_db[cache_table].items():
                 success = await self.send(request, False, {service})
-                if success and key in self.__cache_db[cache_table]:
+                if success:
                     del self.__cache_db[cache_table][key]
+            if not self.__cache_db[cache_table].keys():
+                del self.__cache_db[cache_table]
 
     async def send(self, ingest_request: IngestRequest, save_on_fail: bool = True, services: Optional[Set[str]] = None) -> bool:
         request = self.trim_request(ingest_request)
+        if not request['payload'].strip():
+            return True
+
         result_set = False
         result = True
         if self.__config.get('splunk') and (not services or 'splunk' in services):

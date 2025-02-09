@@ -1,7 +1,7 @@
 import tomllib
 from os import environ
 from pathlib import Path
-from typing import Set
+from typing import Set, Optional
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, Body
@@ -33,9 +33,13 @@ async def healthcheck():
 
 @app.post("/ingest")
 async def ingest(api_key: str, source_type: str, source: str, channel: str,
-                 payload: str = Body(...)):
+                 payload: Optional[str] = Body(None)):
     if api_key not in API_KEYS:
         return {"message": "Invalid API key"}, 401
+
+    payload = payload.strip() if payload else None
+    if not payload:
+        return {"message": "Payload is empty"}, 204
 
     request: IngestRequest = {
         "source_type": source_type,
@@ -45,6 +49,6 @@ async def ingest(api_key: str, source_type: str, source: str, channel: str,
     }
 
     if await CACHE.send(request):
-        return {"message": "Data ingested and forwarded to Splunk"}
+        return {"message": "Data ingested and forwarded to Splunk"}, 200
     else:
-        return {"message": "Failed to forward data to Splunk, will send later"}
+        return {"message": "Failed to forward data to Splunk, will send later"}, 202
